@@ -76,6 +76,7 @@
   <header>
     <h1><span>AgentOps</span> AI Agent</h1>
     <div class="trace-info">
+      <span id="sessionName" style="color: #e2e8f0; font-weight: 500;"></span>
       <span class="trace-id" id="traceId"></span>
       <a id="traceLink" href="#" target="_blank">Open in AgentOps</a>
     </div>
@@ -227,7 +228,10 @@
       try {
         const res = await fetch("/api/trace");
         const data = await res.json();
-        document.getElementById("traceId").textContent = "Trace: " + data.trace_id;
+        const el = document.getElementById("traceId");
+        document.getElementById("sessionName").textContent = data.session_name || "";
+        el.textContent = data.trace_id.substring(0, 8) + "...";
+        el.title = data.trace_id;
         const link = document.getElementById("traceLink");
         link.href = data.dashboard_url;
       } catch (e) {

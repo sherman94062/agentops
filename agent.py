@@ -17,7 +17,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-session = agentops.init(os.getenv("AGENTOPS_API_KEY"))
+SESSION_NAME = f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+session = agentops.init(
+    os.getenv("AGENTOPS_API_KEY"),
+    trace_name=SESSION_NAME,
+    default_tags=["research-agent", "claude-sonnet-4"],
+)
 time.sleep(2)  # Wait for async auth token before any LLM calls
 client = Anthropic()
 
