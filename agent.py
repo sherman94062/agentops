@@ -3,9 +3,11 @@
 import json
 import math
 import os
+import re
 from datetime import datetime
+from html.parser import HTMLParser
 from urllib.error import URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import agentops
@@ -22,10 +24,12 @@ LOG_FILE = "agent_calls.jsonl"
 SYSTEM_PROMPT = """You are a helpful research assistant with access to these tools:
 - calculator: evaluate math expressions (supports arithmetic and math functions like sqrt, sin, log)
 - get_current_datetime: get the current date and time
+- web_search: search the web using DuckDuckGo (use this for general questions, current events, companies, products, etc.)
+- fetch_url: fetch and read the text content of any web page
 - wikipedia_search: search Wikipedia for articles matching a query
 - wikipedia_summary: fetch the full summary of a specific Wikipedia article by title
 
-Use tools when they would help answer the question. For Wikipedia lookups, search first if you're unsure of the exact article title, then fetch the summary. Provide clear, concise answers."""
+Use web_search for general queries, especially about companies, products, news, or anything not likely on Wikipedia. Use fetch_url to read a specific page for more detail. Use Wikipedia tools for encyclopedic topics. Provide clear, concise answers."""
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -41,6 +45,83 @@ def calculator(expression: str) -> str:
 
 def get_current_datetime() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+class _TextExtractor(HTMLParser):
+    """Simple HTML-to-text extractor."""
+    def __init__(self):
+        super().__init__()
+        self._pieces: list[str] = []
+        self._skip = False
+        self._skip_tags = {"script", "style", "noscript", "svg", "nav", "footer", "header"}
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._skip_tags:
+            self._skip = True
+
+    def handle_endtag(self, tag):
+        if tag in self._skip_tags:
+            self._skip = False
+
+    def handle_data(self, data):
+        if not self._skip:
+            text = data.strip()
+            if text:
+                self._pieces.append(text)
+
+    def get_text(self) -> str:
+        return "\n".join(self._pieces)
+
+
+def web_search(query: str) -> str:
+    """Search the web using DuckDuckGo HTML."""
+    try:
+        url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
+        req = Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AgentOpsDemo/1.0",
+        })
+        with urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        # Parse results from DDG HTML
+        results = []
+        for match in re.finditer(
+            r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>.*?'
+            r'<a class="result__snippet"[^>]*>(.*?)</a>',
+            html, re.DOTALL
+        ):
+            href, title, snippet = match.groups()
+            title = re.sub(r"<[^>]+>", "", title).strip()
+            snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+            if title:
+                results.append(f"- {title}\n  {href}\n  {snippet}")
+            if len(results) >= 8:
+                break
+        return "\n\n".join(results) if results else "No results found."
+    except Exception as e:
+        return f"Error searching web: {e}"
+
+
+def fetch_url(url: str) -> str:
+    """Fetch a URL and return its text content (truncated to ~4000 chars)."""
+    try:
+        req = Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AgentOpsDemo/1.0",
+        })
+        with urlopen(req, timeout=15) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            raw = resp.read(200_000).decode("utf-8", errors="replace")
+        if "html" in content_type:
+            parser = _TextExtractor()
+            parser.feed(raw)
+            text = parser.get_text()
+        else:
+            text = raw
+        # Truncate to keep tool results manageable
+        if len(text) > 4000:
+            text = text[:4000] + "\n\n[... truncated]"
+        return text
+    except Exception as e:
+        return f"Error fetching URL: {e}"
 
 
 def wikipedia_search(query: str) -> str:
@@ -97,6 +178,34 @@ TOOLS = [
         }
     },
     {
+        "name": "web_search",
+        "description": "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for the top results. Use this for general queries about companies, products, news, people, or anything not limited to Wikipedia.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query, e.g. 'AgentOps AI observability' or 'latest Python release'"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "fetch_url",
+        "description": "Fetch and read the text content of a web page. Use this to get more detail from a URL found via web_search.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full URL to fetch, e.g. 'https://example.com/page'"
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
         "name": "wikipedia_search",
         "description": "Search Wikipedia for articles matching a query. Returns up to 5 results with titles and snippets.",
         "input_schema": {
@@ -129,6 +238,8 @@ TOOLS = [
 TOOL_DISPATCH = {
     "calculator": lambda args: calculator(args["expression"]),
     "get_current_datetime": lambda args: get_current_datetime(),
+    "web_search": lambda args: web_search(args["query"]),
+    "fetch_url": lambda args: fetch_url(args["url"]),
     "wikipedia_search": lambda args: wikipedia_search(args["query"]),
     "wikipedia_summary": lambda args: wikipedia_summary(args["title"]),
 }
@@ -223,7 +334,7 @@ def main():
     messages = []
 
     print("\n=== AgentOps AI Agent ===")
-    print("Tools: calculator, wikipedia_search, wikipedia_summary, get_current_datetime")
+    print("Tools: web_search, fetch_url, calculator, wikipedia_search, wikipedia_summary, get_current_datetime")
     print("Type 'quit' to exit.\n")
 
     try:

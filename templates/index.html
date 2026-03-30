@@ -83,7 +83,7 @@
     <div class="chat-panel">
       <div class="panel-header">Chat</div>
       <div class="messages" id="messages">
-        <div class="message system">Tools available: calculator, wikipedia_search, wikipedia_summary, get_current_datetime</div>
+        <div class="message system">Tools available: web_search, fetch_url, calculator, wikipedia_search, wikipedia_summary, get_current_datetime</div>
       </div>
       <div class="input-bar">
         <input type="text" id="input" placeholder="Ask me anything..." autocomplete="off" />
@@ -165,7 +165,7 @@
 
     async function resetChat() {
       await fetch("/api/reset", {method: "POST"});
-      messagesEl.innerHTML = '<div class="message system">Tools available: calculator, wikipedia_search, wikipedia_summary, get_current_datetime</div>';
+      messagesEl.innerHTML = '<div class="message system">Tools available: web_search, fetch_url, calculator, wikipedia_search, wikipedia_summary, get_current_datetime</div>';
       inputEl.focus();
     }
 
