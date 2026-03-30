@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import time
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.error import URLError
@@ -17,34 +18,34 @@ from dotenv import load_dotenv
 load_dotenv()
 
 session = agentops.init(os.getenv("AGENTOPS_API_KEY"))
+time.sleep(2)  # Wait for async auth token before any LLM calls
 client = Anthropic()
 
 LOG_FILE = "agent_calls.jsonl"
 TRACES_FILE = "traces.jsonl"
 
 
-def _get_trace_id() -> str:
-    """Extract the trace ID hex string from the AgentOps session."""
-    try:
-        ctx = session.trace_context.span.get_span_context()
-        return format(ctx.trace_id, "032x")
-    except Exception:
-        return "unknown"
+_trace_id_cache: str | None = None
 
 
-def _save_trace(trace_id: str) -> None:
-    """Append trace ID with timestamp and dashboard URL to traces.jsonl."""
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "trace_id": trace_id,
-        "dashboard_url": f"https://app.agentops.ai/sessions?trace_id={trace_id}",
-    }
-    with open(TRACES_FILE, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-
-
-TRACE_ID = _get_trace_id()
-_save_trace(TRACE_ID)
+def get_trace_id() -> str:
+    """Extract the trace ID hex string from the AgentOps session (cached)."""
+    global _trace_id_cache
+    if _trace_id_cache is None:
+        try:
+            ctx = session.trace_context.span.get_span_context()
+            _trace_id_cache = format(ctx.trace_id, "032x")
+        except Exception:
+            _trace_id_cache = "unknown"
+        # Save to traces history on first access
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "trace_id": _trace_id_cache,
+            "dashboard_url": f"https://app.agentops.ai/sessions?trace_id={_trace_id_cache}",
+        }
+        with open(TRACES_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    return _trace_id_cache
 
 SYSTEM_PROMPT = """You are a helpful research assistant with access to these tools:
 - calculator: evaluate math expressions (supports arithmetic and math functions like sqrt, sin, log)
@@ -287,7 +288,7 @@ def calc_cost(input_tokens: int, output_tokens: int) -> float:
 def log_call(request_kwargs: dict, response) -> None:
     """Append a request/response pair to the JSONL log file."""
     entry = {
-        "trace_id": TRACE_ID,
+        "trace_id": get_trace_id(),
         "timestamp": datetime.now().isoformat(),
         "request": {
             "model": request_kwargs.get("model"),
@@ -381,8 +382,9 @@ def main():
 
     agentops.end_session("Success")
     print(f"\n--- Session complete ---")
-    print(f"Trace ID:      {TRACE_ID}")
-    print(f"Dashboard:     https://app.agentops.ai/sessions?trace_id={TRACE_ID}")
+    trace_id = get_trace_id()
+    print(f"Trace ID:      {trace_id}")
+    print(f"Dashboard:     https://app.agentops.ai/sessions?trace_id={trace_id}")
     print(f"Local log:     {os.path.abspath(LOG_FILE)}")
     print(f"Trace history: {os.path.abspath(TRACES_FILE)}")
 

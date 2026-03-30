@@ -6,7 +6,7 @@ import os
 from flask import Flask, jsonify, render_template, request
 
 # Reuse all agent logic from agent.py
-from agent import LOG_FILE, TRACES_FILE, TRACE_ID, chat_turn
+from agent import LOG_FILE, TRACES_FILE, get_trace_id, chat_turn
 
 app = Flask(__name__)
 
@@ -88,8 +88,8 @@ def logs_summary():
 @app.route("/api/trace")
 def trace():
     return jsonify({
-        "trace_id": TRACE_ID,
-        "dashboard_url": f"https://app.agentops.ai/sessions?trace_id={TRACE_ID}",
+        "trace_id": get_trace_id(),
+        "dashboard_url": f"https://app.agentops.ai/sessions?trace_id={get_trace_id()}",
     })
 
 
@@ -112,4 +112,4 @@ def reset():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    app.run(port=5001)
