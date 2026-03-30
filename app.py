@@ -5,13 +5,9 @@ import os
 
 from flask import Flask, jsonify, render_template, request
 
-# Reuse all agent logic from agent.py
-from agent import LOG_FILE, TRACES_FILE, SESSION_NAME, get_trace_id, chat_turn
+from agent import LOG_FILE, TRACES_FILE, SESSION_NAME, get_trace_id, research_agent
 
 app = Flask(__name__)
-
-# Conversation memory (per server process — resets on restart)
-messages: list = []
 
 
 @app.route("/")
@@ -25,8 +21,6 @@ def chat():
     if not user_input:
         return jsonify({"error": "Empty message"}), 400
 
-    messages.append({"role": "user", "content": user_input})
-
     # Collect tool calls made during this turn
     tool_events = []
     _original_print = __builtins__.__dict__.get("print") if isinstance(__builtins__, dict) else getattr(__builtins__, "print")
@@ -39,11 +33,10 @@ def chat():
     import builtins
     builtins.print = _capture_print
     try:
-        answer = chat_turn(messages)
+        answer = research_agent.ask(user_input)
     finally:
         builtins.print = _original_print
 
-    messages.append({"role": "assistant", "content": answer})
     return jsonify({"response": answer, "tools": tool_events})
 
 
@@ -108,7 +101,7 @@ def traces():
 
 @app.route("/api/reset", methods=["POST"])
 def reset():
-    messages.clear()
+    research_agent.reset()
     return jsonify({"status": "ok"})
 
 

@@ -12,16 +12,18 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import agentops
+from agentops.sdk.decorators import agent, operation, trace
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SESSION_NAME = f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-session = agentops.init(
+agentops.init(
     os.getenv("AGENTOPS_API_KEY"),
     trace_name=SESSION_NAME,
     default_tags=["research-agent", "claude-sonnet-4"],
+    auto_start_session=False,
 )
 time.sleep(2)  # Wait for async auth token before any LLM calls
 client = Anthropic()
@@ -29,28 +31,7 @@ client = Anthropic()
 LOG_FILE = "agent_calls.jsonl"
 TRACES_FILE = "traces.jsonl"
 
-
 _trace_id_cache: str | None = None
-
-
-def get_trace_id() -> str:
-    """Extract the trace ID hex string from the AgentOps session (cached)."""
-    global _trace_id_cache
-    if _trace_id_cache is None:
-        try:
-            ctx = session.trace_context.span.get_span_context()
-            _trace_id_cache = format(ctx.trace_id, "032x")
-        except Exception:
-            _trace_id_cache = "unknown"
-        # Save to traces history on first access
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "trace_id": _trace_id_cache,
-            "dashboard_url": f"https://app.agentops.ai/sessions?trace_id={_trace_id_cache}",
-        }
-        with open(TRACES_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    return _trace_id_cache
 
 SYSTEM_PROMPT = """You are a helpful research assistant with access to these tools:
 - calculator: evaluate math expressions (supports arithmetic and math functions like sqrt, sin, log)
@@ -63,9 +44,10 @@ SYSTEM_PROMPT = """You are a helpful research assistant with access to these too
 Use web_search for general queries, especially about companies, products, news, or anything not likely on Wikipedia. Use fetch_url to read a specific page for more detail. Use Wikipedia tools for encyclopedic topics. Provide clear, concise answers."""
 
 # ---------------------------------------------------------------------------
-# Tools
+# Tools (decorated as operations for AgentOps tracking)
 # ---------------------------------------------------------------------------
 
+@operation(name="calculator")
 def calculator(expression: str) -> str:
     try:
         result = eval(expression, {"__builtins__": {}, "math": math})
@@ -74,6 +56,7 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
+@operation(name="get_current_datetime")
 def get_current_datetime() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -104,6 +87,7 @@ class _TextExtractor(HTMLParser):
         return "\n".join(self._pieces)
 
 
+@operation(name="web_search")
 def web_search(query: str) -> str:
     """Search the web using DuckDuckGo HTML."""
     try:
@@ -113,7 +97,6 @@ def web_search(query: str) -> str:
         })
         with urlopen(req, timeout=10) as resp:
             html = resp.read().decode("utf-8", errors="replace")
-        # Parse results from DDG HTML
         results = []
         for match in re.finditer(
             r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>.*?'
@@ -132,6 +115,7 @@ def web_search(query: str) -> str:
         return f"Error searching web: {e}"
 
 
+@operation(name="fetch_url")
 def fetch_url(url: str) -> str:
     """Fetch a URL and return its text content (truncated to ~4000 chars)."""
     try:
@@ -147,7 +131,6 @@ def fetch_url(url: str) -> str:
             text = parser.get_text()
         else:
             text = raw
-        # Truncate to keep tool results manageable
         if len(text) > 4000:
             text = text[:4000] + "\n\n[... truncated]"
         return text
@@ -155,6 +138,7 @@ def fetch_url(url: str) -> str:
         return f"Error fetching URL: {e}"
 
 
+@operation(name="wikipedia_search")
 def wikipedia_search(query: str) -> str:
     try:
         params = f"action=query&list=search&srsearch={quote(query)}&srlimit=5&format=json"
@@ -174,6 +158,7 @@ def wikipedia_search(query: str) -> str:
         return f"Error searching Wikipedia: {e}"
 
 
+@operation(name="wikipedia_summary")
 def wikipedia_summary(title: str) -> str:
     try:
         url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title)}"
@@ -318,52 +303,110 @@ def log_call(request_kwargs: dict, response) -> None:
         f.write(json.dumps(entry) + "\n")
 
 # ---------------------------------------------------------------------------
-# Agentic loop (handles tool use)
+# Agent class (decorated for AgentOps span hierarchy)
 # ---------------------------------------------------------------------------
 
 MAX_TOOL_ROUNDS = 10
 
 
+@agent(name="research-assistant")
+class ResearchAgent:
+    """AI research agent with tools, memory, and AgentOps instrumentation."""
+
+    def __init__(self):
+        self.messages: list = []
+
+    @operation(name="chat_turn")
+    def chat_turn(self) -> str:
+        """Send messages to Claude, execute any tool calls, and return the final text."""
+        for _ in range(MAX_TOOL_ROUNDS):
+            kwargs = dict(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=self.messages,
+                tools=TOOLS,
+            )
+            response = client.messages.create(**kwargs)
+            log_call(kwargs, response)
+
+            if response.stop_reason != "tool_use":
+                text_parts = [b.text for b in response.content if b.type == "text"]
+                return "\n".join(text_parts) if text_parts else "(no response)"
+
+            self.messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = TOOL_DISPATCH[block.name](block.input)
+                    print(f"  [tool] {block.name}({block.input}) -> {result[:200]}")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+            self.messages.append({"role": "user", "content": tool_results})
+
+        return "(max tool rounds reached)"
+
+    def ask(self, user_input: str) -> str:
+        """Add user message and get agent response."""
+        self.messages.append({"role": "user", "content": user_input})
+        answer = self.chat_turn()
+        self.messages.append({"role": "assistant", "content": answer})
+        return answer
+
+    def reset(self):
+        """Clear conversation memory."""
+        self.messages.clear()
+
+
+# Module-level agent instance for the web UI
+research_agent = ResearchAgent()
+
+
 def chat_turn(messages: list) -> str:
-    """Send messages to Claude, execute any tool calls, and return the final text."""
-    for _ in range(MAX_TOOL_ROUNDS):
-        kwargs = dict(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-            tools=TOOLS,
-        )
-        response = client.messages.create(**kwargs)
-        log_call(kwargs, response)
+    """Compatibility wrapper for app.py — delegates to the agent instance."""
+    research_agent.messages = messages
+    return research_agent.chat_turn()
 
-        # If no tool use, extract text and return
-        if response.stop_reason != "tool_use":
-            text_parts = [b.text for b in response.content if b.type == "text"]
-            return "\n".join(text_parts) if text_parts else "(no response)"
 
-        # Execute tools
-        messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                result = TOOL_DISPATCH[block.name](block.input)
-                print(f"  [tool] {block.name}({block.input}) -> {result[:200]}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result,
-                })
-        messages.append({"role": "user", "content": tool_results})
+def get_trace_id() -> str:
+    """Extract the trace ID hex string from the AgentOps trace (cached)."""
+    global _trace_id_cache
+    if _trace_id_cache is None:
+        try:
+            # Get from the active tracer
+            from opentelemetry import trace as otel_trace
+            span = otel_trace.get_current_span()
+            if span and span.get_span_context().trace_id:
+                _trace_id_cache = format(span.get_span_context().trace_id, "032x")
+            else:
+                # Fallback: parse from agentops output
+                _trace_id_cache = "unknown"
+        except Exception:
+            _trace_id_cache = "unknown"
+        if _trace_id_cache != "unknown":
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "trace_id": _trace_id_cache,
+                "dashboard_url": f"https://app.agentops.ai/sessions?trace_id={_trace_id_cache}",
+            }
+            with open(TRACES_FILE, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+    return _trace_id_cache
 
-    return "(max tool rounds reached)"
 
 # ---------------------------------------------------------------------------
-# Interactive loop
+# Interactive CLI loop
 # ---------------------------------------------------------------------------
 
+@trace(name=SESSION_NAME)
 def main():
-    messages = []
+    global _trace_id_cache
+    _trace_id_cache = None  # Reset so it picks up the session trace
+
+    agent = ResearchAgent()
 
     print("\n=== AgentOps AI Agent ===")
     print("Tools: web_search, fetch_url, calculator, wikipedia_search, wikipedia_summary, get_current_datetime")
@@ -377,17 +420,14 @@ def main():
             if user_input.lower() in ("quit", "exit", "q"):
                 break
 
-            messages.append({"role": "user", "content": user_input})
-            answer = chat_turn(messages)
-            messages.append({"role": "assistant", "content": answer})
+            answer = agent.ask(user_input)
             print(f"\nAgent: {answer}\n")
 
     except (KeyboardInterrupt, EOFError):
         print()
 
-    agentops.end_session("Success")
-    print(f"\n--- Session complete ---")
     trace_id = get_trace_id()
+    print(f"\n--- Session complete ---")
     print(f"Trace ID:      {trace_id}")
     print(f"Dashboard:     https://app.agentops.ai/sessions?trace_id={trace_id}")
     print(f"Local log:     {os.path.abspath(LOG_FILE)}")
