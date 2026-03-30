@@ -72,12 +72,14 @@ def logs_summary():
         return jsonify({"total_calls": 0})
     total_in = sum(c["response"]["usage"]["input_tokens"] for c in calls)
     total_out = sum(c["response"]["usage"]["output_tokens"] for c in calls)
+    total_cost = sum(c["response"]["usage"].get("cost_usd", 0) for c in calls)
     tool_calls = sum(1 for c in calls if c["response"]["stop_reason"] == "tool_use")
     return jsonify({
         "total_calls": len(calls),
         "tool_use_calls": tool_calls,
         "input_tokens": total_in,
         "output_tokens": total_out,
+        "total_cost_usd": round(total_cost, 4),
         "first_call": calls[0]["timestamp"][:19],
         "last_call": calls[-1]["timestamp"][:19],
     })

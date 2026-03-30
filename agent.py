@@ -22,9 +22,10 @@ LOG_FILE = "agent_calls.jsonl"
 SYSTEM_PROMPT = """You are a helpful research assistant with access to these tools:
 - calculator: evaluate math expressions (supports arithmetic and math functions like sqrt, sin, log)
 - get_current_datetime: get the current date and time
-- wikipedia_summary: fetch a Wikipedia article summary
+- wikipedia_search: search Wikipedia for articles matching a query
+- wikipedia_summary: fetch the full summary of a specific Wikipedia article by title
 
-Use tools when they would help answer the question. Provide clear, concise answers."""
+Use tools when they would help answer the question. For Wikipedia lookups, search first if you're unsure of the exact article title, then fetch the summary. Provide clear, concise answers."""
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -40,6 +41,25 @@ def calculator(expression: str) -> str:
 
 def get_current_datetime() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def wikipedia_search(query: str) -> str:
+    try:
+        params = f"action=query&list=search&srsearch={quote(query)}&srlimit=5&format=json"
+        url = f"https://en.wikipedia.org/w/api.php?{params}"
+        req = Request(url, headers={"User-Agent": "AgentOpsDemo/1.0"})
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            results = data.get("query", {}).get("search", [])
+            if not results:
+                return "No results found."
+            lines = []
+            for r in results:
+                snippet = r.get("snippet", "").replace('<span class="searchmatch">', "").replace("</span>", "")
+                lines.append(f"- {r['title']}: {snippet}")
+            return "\n".join(lines)
+    except URLError as e:
+        return f"Error searching Wikipedia: {e}"
 
 
 def wikipedia_summary(title: str) -> str:
@@ -77,8 +97,22 @@ TOOLS = [
         }
     },
     {
+        "name": "wikipedia_search",
+        "description": "Search Wikipedia for articles matching a query. Returns up to 5 results with titles and snippets.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query, e.g. 'quantum computing'"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
         "name": "wikipedia_summary",
-        "description": "Fetch a summary of a Wikipedia article by title.",
+        "description": "Fetch the full summary of a specific Wikipedia article by its exact title.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -95,8 +129,20 @@ TOOLS = [
 TOOL_DISPATCH = {
     "calculator": lambda args: calculator(args["expression"]),
     "get_current_datetime": lambda args: get_current_datetime(),
+    "wikipedia_search": lambda args: wikipedia_search(args["query"]),
     "wikipedia_summary": lambda args: wikipedia_summary(args["title"]),
 }
+
+# ---------------------------------------------------------------------------
+# Cost calculation (Claude Sonnet 4 pricing)
+# ---------------------------------------------------------------------------
+
+COST_PER_INPUT_TOKEN = 3.00 / 1_000_000   # $3.00 per 1M input tokens
+COST_PER_OUTPUT_TOKEN = 15.00 / 1_000_000  # $15.00 per 1M output tokens
+
+
+def calc_cost(input_tokens: int, output_tokens: int) -> float:
+    return input_tokens * COST_PER_INPUT_TOKEN + output_tokens * COST_PER_OUTPUT_TOKEN
 
 # ---------------------------------------------------------------------------
 # Call logger
@@ -121,6 +167,7 @@ def log_call(request_kwargs: dict, response) -> None:
             "usage": {
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
+                "cost_usd": round(calc_cost(response.usage.input_tokens, response.usage.output_tokens), 6),
             },
         },
     }
@@ -176,7 +223,7 @@ def main():
     messages = []
 
     print("\n=== AgentOps AI Agent ===")
-    print("Tools: calculator, wikipedia_summary, get_current_datetime")
+    print("Tools: calculator, wikipedia_search, wikipedia_summary, get_current_datetime")
     print("Type 'quit' to exit.\n")
 
     try:
