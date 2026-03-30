@@ -35,6 +35,21 @@ AGENTOPS_API_KEY=your-agentops-key
 
 ## Usage
 
+### Web UI
+
+```bash
+python app.py
+```
+
+Open [http://localhost:5001](http://localhost:5001). The UI has two panels:
+
+- **Chat** (left) — type messages, see tool calls and responses in real time
+- **LLM Call Log** (right) — summary cards (total calls, tool calls, token counts) and a clickable list of every LLM call with full request/response JSON
+
+Buttons: **New Chat** resets conversation memory, **Toggle Logs** shows/hides the log panel, **Refresh Logs** reloads the log data.
+
+### CLI
+
 ```bash
 python agent.py
 ```
@@ -103,7 +118,12 @@ for line in sys.stdin:
 
 ```
 .
-├── agent.py             # Interactive agent with tools and memory
+├── app.py               # Flask web UI
+├── templates/
+│   └── index.html       # Chat + log viewer frontend
+├── agent.py             # Agent core (tools, memory, agentic loop) + CLI
+├── run.sh               # Shell script to activate venv and start CLI
+├── view_log.sh          # Shell script to inspect the call log
 ├── requirements.txt     # Python dependencies
 ├── agent_calls.jsonl    # Local LLM call log (generated at runtime)
 ├── .env                 # API keys (not committed)
