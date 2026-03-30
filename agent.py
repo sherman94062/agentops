@@ -12,7 +12,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import agentops
-from agentops.sdk.decorators import agent, operation, trace
+from agentops.sdk.decorators import operation
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -308,7 +308,6 @@ def log_call(request_kwargs: dict, response) -> None:
 MAX_TOOL_ROUNDS = 10
 
 
-@agent(name="research-assistant")
 class ResearchAgent:
     """AI research agent with tools, memory, and AgentOps instrumentation."""
 
@@ -394,11 +393,7 @@ def get_trace_id() -> str:
 # Interactive CLI loop
 # ---------------------------------------------------------------------------
 
-@trace(name=SESSION_NAME)
 def main():
-    global _trace_id_cache
-    _trace_id_cache = None  # Reset so it picks up the session trace
-
     agent = ResearchAgent()
 
     print("\n=== AgentOps AI Agent ===")
