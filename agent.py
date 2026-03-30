@@ -314,7 +314,6 @@ class ResearchAgent:
     def __init__(self):
         self.messages: list = []
 
-    @operation(name="chat_turn")
     def chat_turn(self) -> str:
         """Send messages to Claude, execute any tool calls, and return the final text."""
         for _ in range(MAX_TOOL_ROUNDS):
