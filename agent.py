@@ -19,11 +19,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SESSION_NAME = f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-agentops.init(
+_agentops_session = agentops.init(
     os.getenv("AGENTOPS_API_KEY"),
     trace_name=SESSION_NAME,
     default_tags=["research-agent", "claude-sonnet-4"],
-    auto_start_session=False,
 )
 time.sleep(2)  # Wait for async auth token before any LLM calls
 client = Anthropic()
@@ -372,18 +371,12 @@ def chat_turn(messages: list) -> str:
 
 
 def get_trace_id() -> str:
-    """Extract the trace ID hex string from the AgentOps trace (cached)."""
+    """Extract the trace ID hex string from the AgentOps session (cached)."""
     global _trace_id_cache
     if _trace_id_cache is None:
         try:
-            # Get from the active tracer
-            from opentelemetry import trace as otel_trace
-            span = otel_trace.get_current_span()
-            if span and span.get_span_context().trace_id:
-                _trace_id_cache = format(span.get_span_context().trace_id, "032x")
-            else:
-                # Fallback: parse from agentops output
-                _trace_id_cache = "unknown"
+            ctx = _agentops_session.trace_context.span.get_span_context()
+            _trace_id_cache = format(ctx.trace_id, "032x")
         except Exception:
             _trace_id_cache = "unknown"
         if _trace_id_cache != "unknown":
