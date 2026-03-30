@@ -12,7 +12,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import agentops
-from agentops.sdk.decorators import operation
+# agentops.init() auto-instruments Anthropic calls; no decorators needed
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -46,7 +46,6 @@ Use web_search for general queries, especially about companies, products, news, 
 # Tools (decorated as operations for AgentOps tracking)
 # ---------------------------------------------------------------------------
 
-@operation(name="calculator")
 def calculator(expression: str) -> str:
     try:
         result = eval(expression, {"__builtins__": {}, "math": math})
@@ -55,7 +54,6 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
-@operation(name="get_current_datetime")
 def get_current_datetime() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -86,7 +84,6 @@ class _TextExtractor(HTMLParser):
         return "\n".join(self._pieces)
 
 
-@operation(name="web_search")
 def web_search(query: str) -> str:
     """Search the web using DuckDuckGo HTML."""
     try:
@@ -114,7 +111,6 @@ def web_search(query: str) -> str:
         return f"Error searching web: {e}"
 
 
-@operation(name="fetch_url")
 def fetch_url(url: str) -> str:
     """Fetch a URL and return its text content (truncated to ~4000 chars)."""
     try:
@@ -137,7 +133,6 @@ def fetch_url(url: str) -> str:
         return f"Error fetching URL: {e}"
 
 
-@operation(name="wikipedia_search")
 def wikipedia_search(query: str) -> str:
     try:
         params = f"action=query&list=search&srsearch={quote(query)}&srlimit=5&format=json"
@@ -157,7 +152,6 @@ def wikipedia_search(query: str) -> str:
         return f"Error searching Wikipedia: {e}"
 
 
-@operation(name="wikipedia_summary")
 def wikipedia_summary(title: str) -> str:
     try:
         url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title)}"
